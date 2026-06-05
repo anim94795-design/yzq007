@@ -24,20 +24,20 @@ COZE_ACCESS_TOKEN = os.environ.get("COZE_ACCESS_TOKEN", "")
 # ============ 企微加解密 ============
 class WeComCrypto:
     """企业微信消息加解密"""
-    
     def __init__(self, token, encoding_aes_key, corp_id):
         self.token = token
         self.corp_id = corp_id
         # EncodingAESKey 加上等于号后 base64 解码
         self.aes_key = base64.b64decode(encoding_aes_key + "=")
-    
+
     def check_signature(self, msg_signature, timestamp, nonce, echostr):
         """验证URL有效性"""
         sign_list = [self.token, timestamp, nonce, echostr]
         sign_list.sort()
         sha1 = hashlib.sha1("".join(sign_list).encode()).hexdigest()
-        if sha1 != msg_signature:
+        if sha6 != msg_signature:
             raise Exception("签名验证失败")
+        
         # 解密echostr
         cipher = AES.new(self.aes_key, AES.MODE_CBC, self.aes_key[:16])
         plain = cipher.decrypt(base64.b64decode(echostr))
@@ -47,7 +47,7 @@ class WeComCrypto:
         # 去掉16字节随机字符串 + 4字节消息长度 + 消息内容 + corp_id
         xml_len = int.from_bytes(plain[16:20], 'big')
         return plain[20:20 + xml_len].decode('utf-8')
-    
+
     def decrypt_message(self, msg_signature, timestamp, nonce, encrypt_text):
         """解密收到的消息"""
         # 验签
@@ -56,6 +56,7 @@ class WeComCrypto:
         sha1 = hashlib.sha1("".join(sign_list).encode()).hexdigest()
         if sha1 != msg_signature:
             raise Exception("签名验证失败")
+        
         # 解密
         cipher = AES.new(self.aes_key, AES.MODE_CBC, self.aes_key[:16])
         plain = cipher.decrypt(base64.b64decode(encrypt_text))
@@ -64,7 +65,11 @@ class WeComCrypto:
         xml_len = int.from_bytes(plain[16:20], 'big')
         return plain[20:20 + xml_len].decode('utf-8')
 
-crypto = WeComCrypto(WECOM_TOKEN, WECOM_ENCODING_AES_KEY, WECOM_CORP_ID)
+# 实例化加解密对象（请确保环境变量已设置）
+try:
+    crypto = WeComCrypto(WECOM_TOKEN, WECOM_ENCODING_AES_KEY, WECOM_CORP_ID)
+except Exception as e:
+    print(f"加解密初始化失败，请检查 EncodingAESKey 格式: {e}")
 
 # ============ 企微access_token缓存 ============
 _token_cache = {"token": "", "expires_at": 0}
@@ -94,7 +99,7 @@ async def get_wecom_access_token():
 async def call_coze(user_message: str, user_id: str) -> str:
     """调用扣子API获取AI回复"""
     async with httpx.AsyncClient(timeout=120.0) as client:
-        # 创建对话
+        # 1. 创建对话
         resp = await client.post(
             "https://api.coze.cn/v3/chat",
             headers={
@@ -113,18 +118,17 @@ async def call_coze(user_message: str, user_id: str) -> str:
                 }]
             }
         )
-        data = resp.json()
         
+        data = resp.json()
         if data.get("code") != 0:
             return f"AI服务暂时不可用，请联系人工客服 180-6060-0598"
         
         chat_id = data["data"]["id"]
         conversation_id = data["data"]["conversation_id"]
         
-        # 轮询等待AI完成（最多等60秒）
+        # 2. 轮询等待AI完成（最多等60秒）
         for _ in range(30):
             await asyncio.sleep(2)
-            
             check = await client.get(
                 "https://api.coze.cn/v3/chat/retrieve",
                 params={
@@ -138,7 +142,7 @@ async def call_coze(user_message: str, user_id: str) -> str:
             status = check.json().get("data", {}).get("status", "")
             
             if status == "completed":
-                # 获取AI回复
+                # 3. 获取AI回复
                 msg_resp = await client.get(
                     "https://api.coze.cn/v3/chat/message/list",
                     params={
@@ -163,31 +167,37 @@ async def call_coze(user_message: str, user_id: str) -> str:
 # ============ 企微发消息 ============
 async def send_wecom_message(user_id: str, content: str):
     """通过企微API主动发消息给用户"""
-    token = await get_wecom_access_token()
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}",
-            json={
-                "touser": user_id,
-                "msgtype": "text",
-                "agentid": int(WECOM_AGENT_ID),
-                "text": {"content": content}
-            }
-        )
-        result = resp.json()
-        if result.get("errcode") != 0:
-            print(f"发送消息失败: {result}")
+    try:
+        token = await get_wecom_access_token()
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}",
+                json={
+                    "touser": user_id,
+                    "msgtype": "text",
+                    "agentid": int(WECOM_AGENT_ID),
+                    "text": {"content": content}
+                }
+            )
+            result = resp.json()
+            if result.get("errcode") != 0:
+                print(f"发送消息失败: {result}")
+    except Exception as e:
+        print(f"发送消息异常: {e}")
 
 # ============ 路由 ============
-
+# 1. GET 请求：用于企业微信服务器验证 (URL校验)
 @app.get("/wx")
 async def verify_url(request: Request):
-    """企微URL验证（GET请求）"""
+    """企微URL验证"""
     msg_signature = request.query_params.get("msg_signature", "")
     timestamp = request.query_params.get("timestamp", "")
     nonce = request.query_params.get("nonce", "")
     echostr = request.query_params.get("echostr", "")
     
+    if not all([msg_signature, timestamp, nonce, echostr]):
+        return PlainTextResponse(content="Missing parameters", status_code=400)
+        
     try:
         reply = crypto.check_signature(msg_signature, timestamp, nonce, echostr)
         return PlainTextResponse(content=reply)
@@ -195,50 +205,54 @@ async def verify_url(request: Request):
         print(f"验证失败: {e}")
         return PlainTextResponse(content="verification failed", status_code=403)
 
-
-@app.get("/wx")
+# 2. POST 请求：用于接收用户发送的消息
+@app.post("/wx")
 async def handle_message(request: Request):
-    """处理企微消息（POST请求）"""
+    """处理企微消息"""
     msg_signature = request.query_params.get("msg_signature", "")
     timestamp = request.query_params.get("timestamp", "")
     nonce = request.query_params.get("nonce", "")
-    body = await request.body()
     
+    body = await request.body()
+    if not body:
+        return PlainTextResponse(content="No body", status_code=400)
+        
     try:
-        # 解析XML获取加密内容
+        # 尝试解析XML
         root = ET.fromstring(body)
-        encrypt = root.find("Encrypt").text
         
-        # 解密
-        xml_content = crypto.decrypt_message(msg_signature, timestamp, nonce, encrypt)
-        
-        # 解析消息
-        msg_root = ET.fromstring(xml_content)
+        # 检查是否是加密消息 (有 Encrypt 节点)
+        encrypt_node = root.find("Encrypt")
+        if encrypt_node is not None:
+            # 密文模式：解密
+            encrypt = encrypt_node.text
+            xml_content = crypto.decrypt_message(msg_signature, timestamp, nonce, encrypt)
+            msg_root = ET.fromstring(xml_content)
+        else:
+            # 明文模式：直接使用
+            msg_root = root
+
         msg_type = msg_root.find("MsgType").text
         from_user = msg_root.find("FromUserName").text
         
         if msg_type == "text":
             user_input = msg_root.find("Content").text
-            
-            # 异步处理，立即返回success
+            # 异步处理并回复，立即返回 success 防止超时
             asyncio.create_task(process_and_reply(from_user, user_input))
-        
+            
         elif msg_type == "event":
-            # 事件消息（如用户进入应用）
             event = msg_root.find("Event").text
             if event == "enter_agent":
-                # 用户进入应用，发送欢迎消息
-                asyncio.create_task(
-                    send_wecom_message(from_user, "您好，我是油站圈老柯！加油站买卖租信息随时问我~")
-                )
-        
+                # 用户进入应用
+                asyncio.create_task(send_wecom_message(from_user, "您好，我是油站圈老柯！加油站买卖租信息随时问我~"))
+                
         return PlainTextResponse(content="success")
-    
+        
     except Exception as e:
         print(f"处理消息异常: {e}")
         return PlainTextResponse(content="success")
 
-
+# 异步处理函数
 async def process_and_reply(user_id: str, user_message: str):
     """异步处理消息并回复"""
     try:
@@ -248,52 +262,37 @@ async def process_and_reply(user_id: str, user_message: str):
         print(f"处理回复异常: {e}")
         await send_wecom_message(user_id, "抱歉，系统暂时繁忙，请联系人工客服 180-6060-0598")
 
-
 # ============ 健康检查 ============
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "油站圈AI销售助手"}
 
-
 # ============ 主动触达接口 ============
 @app.post("/api/send-to-user")
 async def send_to_user(request: Request):
-    """
-    主动给指定客户发消息
-    用于：按标签筛选客户后，批量发送个性化内容
-    """
+    """主动给指定客户发消息"""
     body = await request.json()
     user_id = body.get("user_id", "")
     content = body.get("content", "")
-    
     if not user_id or not content:
         return {"error": "user_id和content必填"}
-    
     await send_wecom_message(user_id, content)
     return {"status": "sent", "user_id": user_id}
 
-
 @app.post("/api/batch-send")
 async def batch_send(request: Request):
-    """
-    批量发送消息（每个客户单独发，内容可个性化）
-    用于：按标签筛选后批量触达
-    """
+    """批量发送消息"""
     body = await request.json()
-    messages = body.get("messages", [])  # [{"user_id": "xxx", "content": "xxx"}, ...]
-    
+    messages = body.get("messages", [])
     results = []
     for msg in messages:
         try:
             await send_wecom_message(msg["user_id"], msg["content"])
             results.append({"user_id": msg["user_id"], "status": "sent"})
-            # 间隔2秒，避免触发企微频率限制
-            await asyncio.sleep(1)
+            await asyncio.sleep(1)  # 避免频率限制
         except Exception as e:
             results.append({"user_id": msg["user_id"], "status": "failed", "error": str(e)})
-    
     return {"results": results}
-
 
 # ============ 启动 ============
 if __name__ == "__main__":
