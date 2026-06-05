@@ -180,7 +180,7 @@ async def send_wecom_message(user_id: str, content: str):
 
 # ============ 路由 ============
 
-@app.get("/wecom/callback")
+@app.get("/wx")
 async def verify_url(request: Request):
     """企微URL验证（GET请求）"""
     msg_signature = request.query_params.get("msg_signature", "")
@@ -196,7 +196,7 @@ async def verify_url(request: Request):
         return PlainTextResponse(content="verification failed", status_code=403)
 
 
-@app.post("/wecom/callback")
+@app.get("/wx")
 async def handle_message(request: Request):
     """处理企微消息（POST请求）"""
     msg_signature = request.query_params.get("msg_signature", "")
@@ -229,7 +229,7 @@ async def handle_message(request: Request):
             if event == "enter_agent":
                 # 用户进入应用，发送欢迎消息
                 asyncio.create_task(
-                    send_wecom_message(from_user, "您好，我是油站圈AI顾问！加油站买卖租信息随时问我~")
+                    send_wecom_message(from_user, "您好，我是油站圈老柯！加油站买卖租信息随时问我~")
                 )
         
         return PlainTextResponse(content="success")
@@ -287,7 +287,7 @@ async def batch_send(request: Request):
         try:
             await send_wecom_message(msg["user_id"], msg["content"])
             results.append({"user_id": msg["user_id"], "status": "sent"})
-            # 间隔1秒，避免触发企微频率限制
+            # 间隔2秒，避免触发企微频率限制
             await asyncio.sleep(1)
         except Exception as e:
             results.append({"user_id": msg["user_id"], "status": "failed", "error": str(e)})
